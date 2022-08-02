@@ -6,8 +6,7 @@ Please refer to https://github.com/airsplay/R2R-EnvDrop to install the Matterpor
 Semantics (configures, motion indicator, landamrks): Download the ``cpmponents`` folder and put it under the projects foler.\\
 Obj-featuers: ``img-features`` folder.\\
 
-
-[[https://drive.google.com/drive/folders/1h8gQRvmzZ9KuALMQAqwghz8JQL9LoPtE?usp=sharing](https://drive.google.com/drive/folders/1h4wRGsaQEPM-t1ebQahvwukcfXDIUMJf?usp=sharing)](https://drive.google.com/drive/folders/1h4wRGsaQEPM-t1ebQahvwukcfXDIUMJf?usp=sharing)
+https://drive.google.com/drive/folders/1h4wRGsaQEPM-t1ebQahvwukcfXDIUMJf?usp=sharing
 
 ### Run Agent
 ```
