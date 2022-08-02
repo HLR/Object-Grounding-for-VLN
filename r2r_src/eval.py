@@ -11,7 +11,7 @@ pp = pprint.PrettyPrinter(indent=4)
 
 from env import R2RBatch
 from utils import load_datasets, load_nav_graphs
-from agent import BaseAgent
+from relation_agent import BaseAgent
 
 
 class Evaluation(object):
@@ -104,8 +104,11 @@ class Evaluation(object):
             for error, p, l in
             zip(self.scores['nav_errors'], self.scores['trajectory_lengths'], self.scores['shortest_lengths'])
         ]
+        
         score_summary['spl'] = np.average(spl)
         return score_summary, self.scores
+    
+  
 
     def bleu_score(self, path2inst):
         from bleu import compute_bleu

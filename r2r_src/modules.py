@@ -112,26 +112,6 @@ class PositionalEncoding(nn.Module):
         x = x + Variable(self.pe[:, :x.size(1)], requires_grad=False)
         return self.dropout(x)
 
-class PositionalEncoding(nn.Module):
-    """Implement the PE function to introduce the concept of relative position"""
-
-    def __init__(self, d_model, dropout, max_len=80):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        # Compute the positional encodings once in log space.
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len).float().unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() *
-                             -(math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)  # dim 2i
-        pe[:, 1::2] = torch.cos(position * div_term)  # dim 2i + 1
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        x = x + Variable(self.pe[:, :x.size(1)], requires_grad=False)
-        return self.dropout(x)
 
 
 
@@ -156,28 +136,50 @@ class StateAttention(nn.Module):
         output = torch.matmul(new_a_t, input_embedding).squeeze(dim=1)
         return output, new_a_t.squeeze(dim=1)
 
+class PositionalEncoding(nn.Module):
+    """Implement the PE function to introduce the concept of relative position"""
 
+    def __init__(self, d_model, dropout, max_len=80):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        # Compute the positional encodings once in log space.
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).float().unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() *
+                             -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)  # dim 2i
+        pe[:, 1::2] = torch.cos(position * div_term)  # dim 2i + 1
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + Variable(self.pe[:, :x.size(1)], requires_grad=False)
+        return self.dropout(x)
+        
 class ConfigObjAttention(nn.Module):
     def __init__(self):
         super(ConfigObjAttention, self).__init__()
         self.sm = nn.Softmax(dim=2)
     
-    def forward(self, config_feature, image_feature, atten_mask, object_mask):
+    def forward(self, config_feature, image_feature, atten_mask=None, object_mask=None):
         # atten: 4 x 1 x 128 
         # image_weight batch x 576 x 128
         # atten_mask batch x 16
         # logit: 4 x 16 x 36
         batch_size, navi_nums, object_num = object_mask.shape
+        dimension = image_feature.shape[-1]
         atten_weight = config_feature.unsqueeze(dim=1) # 4 x 1 x128
         atten_weight = torch.bmm(atten_weight, torch.transpose(image_feature, 1, 2)).squeeze(dim=1)# 4 x 576
         atten_weight = atten_weight.view(batch_size, navi_nums, object_num) # 4 x 16 x 36
-        atten_mask = atten_mask.unsqueeze(dim=2)
-        tmp_atten_object_mask = atten_mask.repeat(1,3,1) * object_mask
-        extened_padded_mask = ((1.0 - tmp_atten_object_mask) * -1e9)
-        atten_weight = atten_weight + extened_padded_mask
+        if atten_mask is not None:
+            atten_mask = atten_mask.unsqueeze(dim=2)
+            tmp_atten_object_mask = atten_mask.repeat(1,3,1) * object_mask
+            extened_padded_mask = ((1.0 - tmp_atten_object_mask) * -1e9)
+            atten_weight = atten_weight + extened_padded_mask
         atten_weight = self.sm(atten_weight) # 4 x 16 x 36
         atten_weight = atten_weight.unsqueeze(dim=2)
-        image_feature = image_feature.view(batch_size, navi_nums, object_num, 128)
+        image_feature = image_feature.view(batch_size, navi_nums, object_num, dimension)
         weighted_config_img_feat = torch.matmul(atten_weight, image_feature).squeeze(dim=2) # 4 x 16 x 1 x 128
 
         return weighted_config_img_feat, atten_weight.squeeze(dim=2)

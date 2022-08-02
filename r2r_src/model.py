@@ -7,6 +7,22 @@ from param import args
 from modules import build_mlp, SoftAttention, PositionalEncoding, ScaledDotProductAttention, create_mask, create_mask_for_object, proj_masking, StateAttention, ConfigObjAttention, PositionalEncoding
 #from transformers import LxmertTokenizer, LxmertModel
 
+class ObjEncoder(nn.Module):
+    ''' Encodes object labels using GloVe. '''
+
+    def __init__(self, vocab_size, embedding_size, glove_matrix):
+        super(ObjEncoder, self).__init__()
+
+        padding_idx = 100
+        word_embeds = nn.Embedding(vocab_size, embedding_size, padding_idx)
+        word_embeds.load_state_dict({'weight': glove_matrix})
+        self.embedding = word_embeds
+        self.embedding.weight.requires_grad = False
+
+    def forward(self, inputs):
+        embeds = self.embedding(inputs)
+        return embeds
+
 class EncoderLSTM(nn.Module):
     ''' Encodes navigation instructions, returning hidden state context (for
         attention methods) and a decoder initial state. '''
@@ -656,16 +672,13 @@ class ConfigurationDecoder(nn.Module):
         self.r_linear = nn.Linear(self.hidden_size, 2)
         self.sm = nn.Softmax(dim=-1)
         self.weight_linear = nn.Linear(2,1)
-        self.cos = torch.nn.CosineSimilarity(dim=-1)
-        
-
         self.lang_position = PositionalEncoding(hidden_size, dropout=0.1, max_len=80)
     
-  
+
 
     def forward(self, action, feature, cand_feat,
                 h_0, prev_h1, c_0,
-                ctx, step, s_0, r_t, ctx_mask, object_mask=None, pano_obj_mask=None, candidate_mask = None, landmark_object_feature = None, candidate_obj_img_feat = None, candidate_obj_text_feat = None, landmark_mask=None,
+                ctx, step, s_0, r_t, ctx_mask, object_mask=None, pano_obj_mask=None, candidate_mask = None,  landmark_object_feature = None, candidate_obj_img_feat = None, candidate_obj_text_feat = None, landmark_mask=None,
                 landmark_triplet_feature=None, obj_rel_arg_feat=None, candidat_relation=None,
                 view_img_feat=None, view_feature=None, view_object_similarity=None, view_mask=None, pano_obj_feat=None, object_index=None,
                 already_dropfeat=False):
@@ -728,7 +741,7 @@ class ConfigurationDecoder(nn.Module):
         if not already_dropfeat:
             cand_feat[..., :-args.angle_feat_size] = self.drop_env(cand_feat[..., :-args.angle_feat_size])
         
-        candidate_obj_text_feat1 = (candidate_obj_text_feat*object_mask.unsqueeze(-1)).unsqueeze(dim=3).repeat(1,1,1,config_num*landmark_num,1).view(batch_size,image_num,-1,obj_feat_dim)
+        candidate_obj_text_feat1 = candidate_obj_text_feat.unsqueeze(dim=3).repeat(1,1,1,config_num*landmark_num,1).view(batch_size,image_num,-1,obj_feat_dim)
         candi_sim_value, candi_sim_index = torch.max(self.cos(candidate_obj_text_feat1, landmark_object_feature1.unsqueeze(1)).view(batch_size, image_num, object_num, -1),dim=2)
         candi_sim_value = torch.sort(candi_sim_value.view(batch_size, image_num, config_num, landmark_num), dim=-1, descending=True, stable=True)[1]
         candi_sim_index = candi_sim_index.view(batch_size, image_num, config_num, landmark_num)
@@ -746,6 +759,10 @@ class ConfigurationDecoder(nn.Module):
         
         return h_1, c_1, logit, h_tilde, ctx_attn
 
+        
+
+
+
 
 class ConfigurationMAFDecoder(nn.Module):
     def __init__(self, embedding_size, hidden_size,
@@ -760,8 +777,8 @@ class ConfigurationMAFDecoder(nn.Module):
         )
         self.drop = nn.Dropout(p=dropout_ratio)
         self.drop_env = nn.Dropout(p=args.featdropout)
-        self.lstm = nn.LSTMCell(embedding_size+feature_size+3*300, hidden_size)
-        self.feat_att_layer = SoftDotAttention(hidden_size, feature_size+3*300)
+        self.lstm = nn.LSTMCell(embedding_size+feature_size, hidden_size)
+        self.feat_att_layer = SoftDotAttention(hidden_size, feature_size)
         self.attention_layer = SoftDotAttention(hidden_size, hidden_size)
         self.candidate_att_layer = SoftDotAttention(hidden_size, feature_size+3*300)
         self.similarity_att_layer = SoftDotAttention(hidden_size, hidden_size)
@@ -778,91 +795,59 @@ class ConfigurationMAFDecoder(nn.Module):
             b_norm = b / torch.clamp(b_n, min=eps)
             sim_mt = torch.einsum("bijk,bifk->bijf", a_norm, b_norm)
             return sim_mt
-        
-
-
-
 
     def forward(self, action, feature, cand_feat,
-                    h_0, prev_h1, c_0,
-                    ctx, step, s_0, r_t, ctx_mask, candi_object_mask=None, candidate_mask = None, candi_landmark = None, 
-                    candidate_obj_feat = None, landmark_mask=None, landmark_relation=None, landmark_relation_mask=None, candidate_relation=None,
-                    pano_obj_feat=None, pano_landmark = None, pano_obj_mask=None, object_index=None, 
-                    already_dropfeat=False):
-                    
-            '''
-            Takes a single step in the decoder LSTM (allowing sampling).
-            action: batch x angle_feat_size
-            feature: batch x 36 x (feature_size + angle_feat_size)
-            cand_feat: batch x cand x (feature_size + angle_feat_size)
-            h_0: batch x hidden_size
-            prev_h1: batch x hidden_size
-            c_0: batch x hidden_size
-            ctx: batch x seq_len x dim
-            ctx_mask: batch x seq_len - indices to be masked
-            already_dropfeat: used in EnvDrop
-        
-            '''
-
-            batch_size, candi_image_num, object_num, obj_feat_dim = candidate_obj_feat.shape
-            _, _, config_num, landmark_num, _ = candi_landmark.shape
-            pano_img_num = pano_obj_num = 36
-            top_n = 3
-
-            pano_sim_value, pano_sim_index = torch.max(self.sim_matrix(pano_obj_feat, pano_landmark.view(batch_size,pano_img_num,-1,obj_feat_dim)),dim=2)
-            pano_sim_value = torch.sort(pano_sim_value.view(batch_size, pano_img_num, config_num, landmark_num), dim=-1, descending=True, stable=True)[1]
-            pano_sim_index = pano_sim_index.view(batch_size, pano_img_num, config_num, landmark_num)
-            pano_sim_index = torch.gather(pano_sim_index, -1, pano_sim_value).view(batch_size,pano_img_num,-1)
-            
-            top_N_sim_obj_index = torch.sort((s_0.unsqueeze(-1).repeat(1,1,landmark_num)*landmark_mask).view(batch_size,-1),descending=True, stable=True)[1][:,:top_n]
-            pano_sim_index = torch.gather(pano_sim_index, -1, top_N_sim_obj_index.unsqueeze(1).expand(batch_size,pano_obj_num,top_n)) #there is a bug to process the similarity number lower than topN
-            pano_sim_obj = torch.gather(pano_obj_feat,2,pano_sim_index.unsqueeze(-1).expand(batch_size,pano_img_num,top_n,300)).view(batch_size, pano_img_num, -1)
-            # Adding Dropout
-            action_embeds = self.embedding(action)
-            action_embeds = self.drop(action_embeds)
-
-            config_num = ctx.shape[1]
-            if not already_dropfeat:
-                # Dropout the raw feature as a common regularization
-                feature[..., :-args.angle_feat_size] = self.drop_env(feature[..., :-args.angle_feat_size])   # Do not drop the last args.angle_feat_size (position feat)
-
-            prev_h1_drop = self.drop(prev_h1)
-
-            #pano_obj_feat = pano_obj_feat.view(batch_size, object_num,-1)
-            feature = torch.cat((feature, pano_sim_obj),dim=-1)
-
-            attn_feat, _ = self.feat_att_layer(prev_h1_drop, feature, output_tilde=False)
-
-            concat_input = torch.cat((action_embeds, attn_feat), 1) # (batch, embedding_size+feature_size)
-            h_1, c_1 = self.lstm(concat_input, (prev_h1, c_0))
-            h_1_drop = self.drop(h_1)
-
-            #ctx = self.lang_position(ctx)
-            h_tilde, ctx_attn = self.attention_layer(h_1_drop, ctx, ctx_mask)
-
-            # Adding Dropout
-            h_tilde_drop = self.drop(h_tilde)
-            
-            if not already_dropfeat:
-                cand_feat[..., :-args.angle_feat_size] = self.drop_env(cand_feat[..., :-args.angle_feat_size])
-            
-        
-            candi_sim_value, candi_sim_index = torch.max(self.sim_matrix(candidate_obj_feat, candi_landmark.view(batch_size, candi_image_num,-1,obj_feat_dim)),dim=2)
-            candi_sim_value = torch.sort(candi_sim_value.view(batch_size, candi_image_num, config_num, landmark_num), dim=-1, descending=True, stable=True)[1]
-            candi_sim_index = candi_sim_index.view(batch_size, candi_image_num, config_num, landmark_num)
-            candi_sim_index = torch.gather(candi_sim_index, -1, candi_sim_value).view(batch_size, candi_image_num, -1)
-
-            candi_top_N_sim_obj_index =torch.sort((ctx_attn.unsqueeze(-1).repeat(1,1,landmark_num)*landmark_mask).view(batch_size,-1),descending=True, stable=True)[1][:,:top_n]
-            candi_sim_index = torch.gather(candi_sim_index, -1, candi_top_N_sim_obj_index.unsqueeze(1).expand(batch_size, candi_image_num,top_n))
-            candi_sim_obj = torch.gather(candidate_obj_feat,2,candi_sim_index.unsqueeze(-1).expand(batch_size, candi_image_num, top_n,300)).view(batch_size, candi_image_num, -1)
+                h_0, prev_h1, c_0,
+                ctx, step, s_0, ctx_mask, candi_object_mask=None, candi_landmark = None,
+                candi_img_feat = None, candi_text_feat = None, landmark_mask=None, landmark_relation=None, landmark_relation_mask=None, candi_relation=None,
+                pano_img_feat=None, pano_text_feat=None, pano_landmark = None, pano_obj_mask=None, object_index=None, 
+                already_dropfeat=False):
+                
+        '''
+        Takes a single step in the decoder LSTM (allowing sampling).
+        :param candi_img_feat [batch, img_num, object_num, object_feat]
+        :param candi_landmark [batch, img_num, config_num, landmark_num, land_feat]
     
-            #candidate_obj_text_feat = candidate_obj_text_feat[:,:,:3].view(batch_size,image_num,-1)
-            
-            cand_feat = torch.cat((cand_feat,candi_sim_obj),dim=-1)
+        '''
+        batch_size, candi_image_num, object_num, obj_feat_dim = candi_img_feat.shape
+        _, _, config_num, landmark_num, _ = candi_landmark.shape
+        top_n = 3
 
-            _, logit = self.candidate_att_layer(h_tilde_drop, cand_feat, output_prob=False)
-            
-            return h_1, c_1, logit, h_tilde, ctx_attn
+        action_embeds = self.embedding(action)
+        action_embeds = self.drop(action_embeds)
+
+        if not already_dropfeat:
+            # Dropout the raw feature as a common regularization
+            feature[..., :-args.angle_feat_size] = self.drop_env(feature[..., :-args.angle_feat_size])   # Do not drop the last args.angle_feat_size (position feat)
+
+        prev_h1_drop = self.drop(prev_h1)
+        #feature = torch.cat((feature, pano_sim_obj),dim=-1)
+        attn_feat, _ = self.feat_att_layer(prev_h1_drop, feature, output_tilde=False)
+
+        concat_input = torch.cat((action_embeds, attn_feat), 1) # (batch, embedding_size+feature_size)
+        h_1, c_1 = self.lstm(concat_input, (prev_h1, c_0))
+        h_1_drop = self.drop(h_1)
+
+        #ctx = self.lang_position(ctx)
+        h_tilde, ctx_attn = self.attention_layer(h_1_drop, ctx, ctx_mask)
+
+        # Adding Dropout
+        h_tilde_drop = self.drop(h_tilde)
+        
+        if not already_dropfeat:
+            cand_feat[..., :-args.angle_feat_size] = self.drop_env(cand_feat[..., :-args.angle_feat_size])
+        
+        # Obtain the similarity between landamrks and objects [B, img_num, land_num, 300] * [B, img_num, obj_num, 300] => [B, img_num, land_num, obj_num]
+        candi_sim_value, candi_sim_index = torch.max(torch.einsum("bijk,bifk->bijf", candi_landmark.view(batch_size, candi_image_num,-1,obj_feat_dim), candi_img_feat), dim=-1)
+        candi_top_N_sim_obj_index =torch.sort((ctx_attn.unsqueeze(-1).repeat(1,1,landmark_num)*landmark_mask).view(batch_size,-1),descending=True, stable=True)[1][:,:top_n]
+        candi_sim_index = torch.gather(candi_sim_index, -1, candi_top_N_sim_obj_index.unsqueeze(1).expand(batch_size, candi_image_num,top_n))
+        candi_sim_obj = torch.gather(candi_img_feat,2,candi_sim_index.unsqueeze(-1).expand(batch_size, candi_image_num, top_n,300)).view(batch_size, candi_image_num, -1)
+
+        # Enrich image feature with the top landmark feature
+        cand_feat = torch.cat((cand_feat,candi_sim_obj),dim=-1)
+
+        _, logit = self.candidate_att_layer(h_tilde_drop, cand_feat, output_prob=False)
+        return h_1, c_1, logit, h_tilde, ctx_attn
 
 
 
@@ -892,22 +877,14 @@ class ConfigurationRelationDecoder(nn.Module):
         self.weight_linear = nn.Linear(2,1)
         self.cos = torch.nn.CosineSimilarity(dim=-1)
 
-
         self.lang_position = PositionalEncoding(hidden_size, dropout=0.1, max_len=80)
 
-    def sim_matrix(self, a, b, eps=1e-8):
-        a_n, b_n = torch.norm(a,dim=-1,keepdim=True), torch.norm(b,dim=-1,keepdim=True)
-        a_norm = a / torch.clamp(a_n, min=eps)
-        b_norm = b / torch.clamp(b_n, min=eps)
-        sim_mt = torch.einsum("bijk,bfk->bijf", a_norm, b_norm)
-       #torch.mm(a_norm, b_norm.transpose(0, 1))
-        return sim_mt
 
     def forward(self, action, feature, cand_feat,
                 h_0, prev_h1, c_0,
                 ctx, step, s_0, r_t, ctx_mask, object_mask=None, candidate_mask = None, landmark_object_feature = None, 
                 candidate_obj_img_feat = None, candidate_obj_text_feat = None, landmark_mask=None, landmark_relation=None, landmark_relation_mask=None, candidate_relation=None,
-                pano_obj_feat=None, object_index=None, 
+                pano_obj_feat=None, object_index=None,
                 already_dropfeat=False):
         '''
         Takes a single step in the decoder LSTM (allowing sampling).
@@ -931,7 +908,6 @@ class ConfigurationRelationDecoder(nn.Module):
 
         pano_obj_feat1 = pano_obj_feat.unsqueeze(dim=3).repeat(1,1,1,config_num*landmark_num,1).view(batch_size,pano_img_num,-1,obj_feat_dim)
         landmark_object_feature1 = landmark_object_feature.view(batch_size,-1,obj_feat_dim).unsqueeze(dim=1).repeat(1,object_num,1,1).view(batch_size,-1,obj_feat_dim)
-        test_sim1 = self.sim_matrix(pano_obj_feat, landmark_object_feature.view(batch_size,-1,obj_feat_dim))
         pano_sim_index = torch.max(self.cos(pano_obj_feat1, landmark_object_feature1.unsqueeze(1)).view(batch_size, pano_img_num, object_num, -1),dim=2)[1]
         #candi_sim_index = torch.gather(pano_sim_index,1,object_index.unsqueeze(-1).expand(batch_size,image_num,config_num*landmark_num))*(~candidate_mask.unsqueeze(-1))
 
@@ -970,8 +946,7 @@ class ConfigurationRelationDecoder(nn.Module):
         candidate_obj_text_feat1 = candidate_obj_text_feat.unsqueeze(dim=3).repeat(1,1,1,config_num*landmark_num,1).view(batch_size,image_num,-1,obj_feat_dim)
         candi_sim_index = torch.max(self.cos(candidate_obj_text_feat1, landmark_object_feature1.unsqueeze(1)).view(batch_size, image_num, object_num, -1),dim=2)[1]
         candi_top_N_sim_obj_index =torch.argsort((ctx_attn.unsqueeze(-1).repeat(1,1,landmark_num)*landmark_mask).view(batch_size,-1),descending=True)[:,:top_n]  
-        land_obj_relation = torch.einsum('bik,bjk->bij', candidate_relation, torch.gather(landmark_relation.view(batch_size,config_num*landmark_num,-1),1, candi_top_N_sim_obj_index[:,0].unsqueeze(1).unsqueeze(-1).expand(batch_size,top_n,6)))
-        #land_obj_relation = torch.einsum('bik,bjk->bij', candidate_relation, torch.gather(landmark_relation.view(batch_size,config_num*landmark_num,-1),1, candi_top_N_sim_obj_index.unsqueeze(-1).expand(batch_size,top_n,6)))
+        land_obj_relation = torch.einsum('bik,bjk->bij', candidate_relation, torch.gather(landmark_relation.view(batch_size,config_num*landmark_num,-1),1, candi_top_N_sim_obj_index.unsqueeze(-1).expand(batch_size,top_n,6)))
         candi_rel_index = torch.gather(landmark_relation_mask.view(batch_size,-1), -1, candi_top_N_sim_obj_index).unsqueeze(1).unsqueeze(-1).expand(batch_size,image_num,top_n,6)
         candi_sim_index = torch.gather(candi_sim_index, -1, candi_top_N_sim_obj_index.unsqueeze(1).expand(batch_size,image_num,top_n))
         candi_sim_obj = torch.gather(candidate_obj_text_feat,2,candi_sim_index.unsqueeze(-1).expand(batch_size,image_num,top_n,obj_feat_dim))
@@ -985,8 +960,6 @@ class ConfigurationRelationDecoder(nn.Module):
         _, logit = self.candidate_att_layer(h_tilde_drop, cand_feat, output_prob=False)
         
         return h_1, c_1, logit, h_tilde, ctx_attn
-
-
 
 
 class ConfigurationLXMERTDecoder(nn.Module):
@@ -1074,3 +1047,6 @@ class ConfigurationLXMERTDecoder(nn.Module):
             _, logit = self.candidate_att_layer(h_tilde_drop, cand_feat, output_prob=False)
             
             return h_1, c_1, logit, h_tilde, ctx_attn
+
+
+

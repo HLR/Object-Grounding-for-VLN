@@ -180,7 +180,7 @@ class Speaker():
             if viewpoints is not None:
                 for i, ob in enumerate(obs):
                     viewpoints[i].append(ob['viewpoint'])
-            img_feats.append(self.listener._feature_variable(obs)[0])
+            img_feats.append(self.listener._feature_variable(obs))
             teacher_action = self._teacher_action(obs, ended)
             teacher_action = teacher_action.cpu().numpy()
             for i, act in enumerate(teacher_action):

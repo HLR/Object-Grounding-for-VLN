@@ -7,7 +7,8 @@ from itertools import chain
 
 
 sys.path.append('build')
-# sys.path.append('build')
+sys.path.append('r2r_src_MAF')
+
 import MatterSim
 import string
 import json
@@ -17,29 +18,20 @@ from collections import Counter, defaultdict
 import numpy as np
 import networkx as nx
 from param import args
-import en_core_web_lg
 import pickle
-
 from MAF.utils.wordembeddings import WordEmbeddings
 from MAF.utils.wordindexer import WordIndexer
 
-nlp = en_core_web_lg.load()
+# nlp = en_core_web_lg.load()
 
 # padding, unknown word, end of sentence
 base_vocab = ['<PAD>', '<UNK>', '<EOS>']
 padding_idx = base_vocab.index('<PAD>')
-# config = {
-#     'split_file' : 'tasks/R2R/dictionaries/split_dictionary.txt',
-#     'motion_indicator_file' : 'tasks/R2R-pano/data/data/component_data/motion_indicator/motion_dict.txt',
-#     'stop_words_file': 'tasks/R2R/dictionaries/stop_words.txt',
-#     'position_file': 'tasks/R2R-pano/data/data/spatial_position_dic.txt'
-# }
 config = {
-    'split_file' : '/home/joslin/R2R-EnvDrop/tasks/R2R/dictionaries/split_dictionary.txt',
-    'motion_indicator_file' : '/home/joslin/R2R-EnvDrop/tasks/R2R/dictionaries/motion_dict.txt',
-    'stop_words_file': '/home/joslin/R2R-EnvDrop/tasks/R2R/dictionaries/stop_words.txt',
-    'position_file': '/home/joslin/R2R-EnvDrop/tasks/R2R/dictionaries/spatial_position_dic.txt',
-    'scene_file': '/home/joslin/R2R-EnvDrop/tasks/R2R/dictionaries/scene_words.txt'
+    'split_file' : '/VL/space/zhan1624/obj-vln/tasks/R2R/dictionaries/split_dictionary.txt',
+    'motion_indicator_file' : '/VL/space/zhan1624/obj-vln/tasks/R2R/dictionaries/motion_dict.txt',
+    'stop_words_file': '/VL/space/zhan1624/selfmonitoring-agent/tasks/R2R-pano/data/data/stop_words.txt',
+    'position_file': '/VL/space/zhan1624/selfmonitoring-agent/tasks/R2R-pano/data/data/spatial_position_dic.txt'
 }
 def split_oder(dictionary):
     return sorted(dictionary, key = lambda x: len(x.split()), reverse=True)
@@ -60,12 +52,6 @@ with open(config['motion_indicator_file']) as f_dict:
     motion_dict = f_dict.read().split('\n')
     motion_dict = [each_motion.strip() for each_motion in motion_dict]
     motion_dict = split_oder(motion_dict)
-
-with open(config['scene_file']) as f_scene:
-    scene_words = f_scene.read().split('\n')
-    scene_words = [each_scene.strip() for each_scene in scene_words]
-    scene_words = sorted(scene_words, key = lambda x: len(x), reverse=True)
-
 
 def load_nav_graphs(scans):
     ''' Load connectivity graph for each scan '''
@@ -106,7 +92,6 @@ def load_datasets(splits):
     old_state = random.getstate()
     for split in splits:
         # It only needs some part of the dataset?x
-        
         components = split.split("@")
         number = -1
         if len(components) > 1:
@@ -271,7 +256,6 @@ def get_motion_indicator(test_sentence):
 #         landmark_list=[("", np.zeros(300))]
 #     return [landmark_list, landmark_flag]
 
-# 
 def get_landmark(each_configuration, whether_root=False):
     landmark_stopwords = ['right', 'left','front','them', 'you','end','top', 'bottom','it','middle','side', 'a left', 'a right', 'level', 'exit', "each", 'other', "far", 'your', 'area', 'flight']
     definite_article = ['a', 'an', 'the']
@@ -588,6 +572,7 @@ def get_point_angle_feature(baseViewId=0):
     sim = new_simulator()
 
     feature = np.empty((36, args.angle_feat_size), np.float32)
+    angles = np.empty((36, 2), np.float32)
     base_heading = (baseViewId % 12) * math.radians(30)
     for ix in range(36):
         if ix == 0:
@@ -601,7 +586,7 @@ def get_point_angle_feature(baseViewId=0):
         assert state.viewIndex == ix
 
         heading = state.heading - base_heading
-
+        angles[ix, :] = np.array([heading, state.elevation])
         feature[ix, :] = angle_feature(heading, state.elevation)
     return feature
 
@@ -708,13 +693,6 @@ def length2mask(length, size=None):
                 > (torch.LongTensor(length) - 1).unsqueeze(1)).cuda()
     return mask
 
-def length2mask(length, size=None):
-    batch_size = len(length)
-    size = int(max(length)) if size is None else size
-    mask = (torch.arange(size, dtype=torch.int64).unsqueeze(0).repeat(batch_size, 1)
-                > (torch.LongTensor(length) - 1).unsqueeze(1)).cuda()
-    return mask
-
 def average_length(path2inst):
     length = []
 
@@ -788,29 +766,30 @@ class FloydGraph:
 
 
 def load_vocabulary(embeddings_file: str) -> WordEmbeddings:
-	f = open(embeddings_file)
-	word_indexer = WordIndexer()
-	vectors = []
+    f = open(embeddings_file)
+    word_indexer = WordIndexer()
+    vectors = []
 
-	word_indexer.add_and_get_index("PAD")
-	word_indexer.add_and_get_index("UNK")
+    word_indexer.add_and_get_index("PAD")
+    word_indexer.add_and_get_index("UNK")
 
-	for line in f:
-		if line.strip() != "":
-			space_idx = line.find(' ')
-			word = line[:space_idx]
-			numbers = line[space_idx + 1:]
-			float_numbers = [float(number_str) for number_str in numbers.split()]
-			vector = np.array(float_numbers)
-			word_indexer.add_and_get_index(word)
+    for line in f:
+        if line.strip() != "":
+            space_idx = line.find(' ')
+            word = line[:space_idx]
+            numbers = line[space_idx + 1:]
+            float_numbers = [float(number_str) for number_str in numbers.split()]
+            vector = np.array(float_numbers)
+            word_indexer.add_and_get_index(word)
 
-			if len(vectors) == 0:
-				vectors.append(np.zeros(vector.shape[0]))
-				vectors.append(np.zeros(vector.shape[0]))
-			vectors.append(vector)
-	f.close()
-	print("Read in " + repr(len(word_indexer)) + " vectors of size " + repr(vectors[0].shape[0]))
-	return WordEmbeddings(word_indexer, np.array(vectors))
+            if len(vectors) == 0:
+                vectors.append(np.zeros(vector.shape[0]))
+                vectors.append(np.zeros(vector.shape[0]))
+            vectors.append(vector)
+    f.close()
+    print("Read in " + repr(len(word_indexer)) + " vectors of size " + repr(vectors[0].shape[0]))
+    return WordEmbeddings(word_indexer, np.array(vectors))
+
 
 def glove_embedding(embedding_file):
     wordEmbedding = load_vocabulary(embedding_file)
