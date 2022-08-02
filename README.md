@@ -2,7 +2,7 @@
 This repository is the code for the paper
 [Explicit Object Relation Alignment for Vision and Language Navigation](https://aclanthology.org/2022.acl-srw.24.pdf).
 ## Environment Installation
-Please refer to [Env-Dropout](https://github.com/airsplay/R2R-EnvDrop) to install the Matterport3D simulators, download Room-toroom dataset and install the python enviornments.
+Please refer to [Env-Dropout](https://github.com/airsplay/R2R-EnvDrop) to install the Matterport3D simulators, download Room-to-room dataset and install the python enviornments.
 
 
 ## Download the feature
