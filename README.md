@@ -6,7 +6,7 @@ Please refer to [Env-Dropout](https://github.com/airsplay/R2R-EnvDrop) to instal
 
 
 ## Download the feature
-Semantics (configures, motion indicator, landamrks): Download the ``cpmponents`` folder and put it under the projects foler.\
+Semantics (configures, motion indicator, landamrks): Download the ``components`` folder and put it under the projects foler.\
 Obj-featuers: ``img-features`` folder.
 
 [Features](https://drive.google.com/drive/folders/1h4wRGsaQEPM-t1ebQahvwukcfXDIUMJf?usp=sharing)
